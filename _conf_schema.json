@@ -1,0 +1,50 @@
+{
+  "api_key": {
+    "description": "VOLCENGINE_API_KEY",
+    "type": "string",
+    "secret": true,
+    "hint": "Enter the API key here, or leave empty to read the VOLCENGINE_API_KEY environment variable."
+  },
+  "base_url": {
+    "description": "Volcengine API base URL",
+    "type": "string",
+    "default": "https://ark.cn-beijing.volces.com/api/v3/images/generations",
+    "hint": "Seedream 5.5 isn't included in Volcengine Agent Plan currently. Use official Volcengine Image Generation API."
+  },
+  "timeout_seconds": {
+    "description": "API request timeout in seconds",
+    "type": "int",
+    "default": 300,
+    "hint": "Timeout for each background API request. The tool returns immediately. Failed requests are not automatically retried."
+  },
+  "max_storage_gb": {
+    "description": "Maximum image archive storage (GB)",
+    "type": "int",
+    "default": 10,
+    "hint": "Before each API request, if total archive file size exceeds this limit, delete oldest request directories until below it. Current and queued requests are protected. New images may exceed the limit until the next request."
+  },
+  "allow_non_admin_private_chat": {
+    "description": "Allow non-administrators to generate images in private chats",
+    "type": "bool",
+    "default": false,
+    "hint": "Disabled by default. When disabled, any call to this plugin's tools by a non-administrator in a private chat returns: Non-administrator users are currently only allowed to generate images in group chats. Administrator private chats and group chats continue to follow the existing rules. Reload the plugin after changes."
+  },
+  "sliding_window": {
+    "description": "Sliding window (minutes)",
+    "type": "int",
+    "default": 360,
+    "hint": "Nonnegative integer. Set to 0 to skip the sliding-window quota check."
+  },
+  "per_user_max_images": {
+    "description": "Maximum images per user in the sliding window",
+    "type": "int",
+    "default": 3,
+    "hint": "Nonnegative integer. Counts requested images, including pending and failed jobs. A quota of 0 rejects requests through the normal quota check; the tool remains available. Ignored when the window is 0. Rejected requests are not recorded. Administrators bypass this check. Uses the latest 1000 receipts per user."
+  },
+  "total_max_images": {
+    "description": "Maximum images for all users in the sliding window",
+    "type": "int",
+    "default": 30,
+    "hint": "Nonnegative integer. Counts all accepted images, including administrator requests. Only ordinary users are restricted. Set to 0 to reject ordinary-user requests when the total window is enabled. Uses the latest 1000 total receipts."
+  }
+}
