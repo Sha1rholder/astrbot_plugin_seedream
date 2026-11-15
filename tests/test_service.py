@@ -1,6 +1,7 @@
 """Test the plugin entry point, tool calls, message handling, and image delivery."""
 
 import asyncio
+import io
 import json
 import time
 from unittest.mock import AsyncMock, Mock, create_autospec
@@ -15,12 +16,13 @@ from data.plugins.astrbot_plugin_seedream import main as plugin_module
 from data.plugins.astrbot_plugin_seedream.src import (
     generate as api_module,
 )
+from PIL import Image as PillowImage
 
 ARGUMENTS = {"prompt": "cat", "description": "A cat"}
 
 
 @pytest.mark.asyncio
-async def test_tool_executor_to_png_delivery(
+async def test_tool_executor_to_webp_delivery(
     service, event, png, mock_http, tool_context, finish_turn
 ):
     from astrbot.core.astr_agent_runtime.tool_executor import FunctionToolExecutor
@@ -75,7 +77,7 @@ async def test_tool_executor_to_png_delivery(
     assert isinstance(message.chain[1], Image)
     assert (
         message.chain[1].file
-        == Image.fromFileSystem(str(service.output_dir / "0/0.png")).file
+        == Image.fromFileSystem(str(service.output_dir / "0/0.webp")).file
     )
     assert len(message.chain) == 2
     assert len(requests) == 2
@@ -139,8 +141,8 @@ async def test_cleanup_protects_pending_delivery(
         size = (service.output_dir / "0/request.yaml").stat().st_size
         monkeypatch.setattr(service.api, "storage_limit", lambda: size + 1)
         assert "No API request was made" in await service.generate(event, ARGUMENTS)
-        assert (service.output_dir / "0/0.png").is_file()
-        assert not (service.output_dir / "1/0.png").exists()
+        assert (service.output_dir / "0/0.webp").is_file()
+        assert not (service.output_dir / "1/0.webp").exists()
         release.set()
         await finish_turn()
         assert "Image generation request submitted" in await service.generate(
@@ -148,7 +150,7 @@ async def test_cleanup_protects_pending_delivery(
         )
         await finish_turn()
         assert not (service.output_dir / "0").exists()
-        assert (service.output_dir / "2/0.png").is_file()
+        assert (service.output_dir / "2/0.webp").is_file()
     finally:
         release.set()
 
@@ -277,7 +279,7 @@ async def test_combined_delivery_failure_never_regenerates(
     service, event, tmp_path, finish_turn
 ):
     """Verify failed delivery reports uncertainty without generating or sending again."""
-    service.api.generate = AsyncMock(return_value=[tmp_path / "0.png"])
+    service.api.generate = AsyncMock(return_value=[tmp_path / "0.webp"])
     service.context.send_message.side_effect = RuntimeError("private upstream response")
     service.logger = Mock()
     result = await service.generate(
@@ -617,3 +619,55 @@ async def test_unload_cancels_result_waiting_for_reply(plugin, service, event):
     await asyncio.wait_for(plugin.terminate(), 1)
     assert not service._tasks
     service.context.send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_multiple_images_in_one_turn_use_distinct_lossless_archives(
+    service, event, image_bytes, mock_http, finish_turn
+):
+    """Deliver each queued image from its own archive after the agent finishes."""
+    sources = [
+        image_bytes("PNG", color=color, mode="RGBA")
+        for color in [(255, 0, 0, 255), (0, 255, 0, 100), (0, 0, 255, 0)]
+    ]
+    submitted = []
+
+    def respond(request):
+        if request.method == "POST":
+            index = len(submitted)
+            submitted.append(json.loads(request.content))
+            return httpx.Response(
+                200, json={"data": [{"url": f"https://cdn.invalid/{index}"}]}
+            )
+        return httpx.Response(200, content=sources[int(request.url.path[1:])])
+
+    mock_http(service.api, respond)
+    for index in range(len(sources)):
+        result = await asyncio.wait_for(
+            service.generate(event, {**ARGUMENTS, "description": f"Image {index}"}), 5
+        )
+        assert "Image generation request submitted" in result
+    service.context.send_message.assert_not_awaited()
+    await finish_turn()
+    assert len(submitted) == len(sources)
+    deliveries = service.context.send_message.call_args_list
+    assert len(deliveries) == len(sources)
+    for index, raw in enumerate(sources):
+        directory = service.output_dir / str(index)
+        path = directory / "0.webp"
+        assert {p.name for p in directory.iterdir()} == {
+            "request.yaml",
+            "response.yaml",
+            "0.webp",
+        }
+        with (
+            PillowImage.open(path) as result,
+            PillowImage.open(io.BytesIO(raw)) as source,
+        ):
+            assert result.convert("RGBA").tobytes() == source.convert("RGBA").tobytes()
+        expected = Image.fromFileSystem(str(path)).file
+        assert any(
+            call.args[1][0].text == f"Image {index}"
+            and call.args[1][1].file == expected
+            for call in deliveries
+        )

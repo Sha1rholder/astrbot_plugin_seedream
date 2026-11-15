@@ -116,7 +116,7 @@ def test_reference_size_boundary_and_corruption(image_bytes, monkeypatch):
 @pytest.mark.parametrize(
     "endpoint", [DEFAULT_ENDPOINT, "https://example.invalid/custom/generate"]
 )
-async def test_http_contract_download_redirect_and_original_png(
+async def test_http_contract_download_redirect_and_lossless_webp(
     api, tmp_path, png, webp, mock_http, endpoint
 ):
     api.config["base_url"] = endpoint
@@ -163,9 +163,10 @@ async def test_http_contract_download_redirect_and_original_png(
         arguments,
         on_request_sent=lambda: submitted.append(True),
     )
-    assert paths[0].name == "0.png"
-    assert paths[0].read_bytes() == png
+    assert paths[0].name == "0.webp"
+    assert not (paths[0].parent / "0.png").exists()
     with Image.open(paths[0]) as image:
+        assert image.format == "WEBP"
         assert image.mode == "RGBA"
         assert image.getpixel((0, 0))[3] == 100
     archive = yaml.safe_load(paths[0].with_name("request.yaml").read_text())
@@ -194,7 +195,7 @@ async def test_api_errors_do_not_retry_or_leak(api, tmp_path, mock_http, status)
     assert "private" not in str(exc.value)
     assert len(requests) == 1
     assert (tmp_path / "0/request.yaml").exists()
-    assert not (tmp_path / "0/0.png").exists()
+    assert not (tmp_path / "0/0.webp").exists()
 
 
 @pytest.mark.asyncio
@@ -245,9 +246,9 @@ async def test_invalid_responses_do_not_download(api, tmp_path, mock_http, resul
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["timeout", "status", "html", "webp", "truncated"])
+@pytest.mark.parametrize("failure", ["timeout", "status", "html", "truncated"])
 async def test_download_failures_preserve_request_without_retry(
-    api, tmp_path, png, webp, mock_http, failure
+    api, tmp_path, png, mock_http, failure
 ):
     requests = []
 
@@ -265,13 +266,15 @@ async def test_download_failures_preserve_request_without_retry(
             200,
             content={
                 "html": b"<html>error</html>",
-                "webp": webp,
                 "truncated": png[:30],
             }[failure],
         )
 
     mock_http(api, handler)
-    with pytest.raises(ImageGenerationError) as exc:
+    expected_error = (
+        ImageGenerationError if failure in {"timeout", "status"} else OSError
+    )
+    with pytest.raises(expected_error) as exc:
         await api.generate(api.prepare(ARGUMENTS)[0], [], tmp_path, ARGUMENTS)
     assert "private" not in str(exc.value)
     assert len(requests) == 2
@@ -327,9 +330,9 @@ def test_schema_and_documented_examples():
         jsonschema.validate(json.loads(example), INPUT_SCHEMA)
 
 
-def test_png_rejects_crc_corruption(png, tmp_path):
+def test_pillow_decode_failure_leaves_no_output(png, tmp_path):
     corrupted = bytearray(png)
     corrupted[29] ^= 1
-    with pytest.raises(ImageGenerationError, match="PNG"):
+    with pytest.raises(OSError):
         SeedreamAPI.save_image(bytes(corrupted), tmp_path)
     assert not list(tmp_path.iterdir())

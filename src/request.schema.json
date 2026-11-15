@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/Sha1rholder/astrbot_plugin_seedream/main/src/request.schema.json",
   "title": "Archived Seedream image generation request",
-  "description": "Original tool arguments before normalization or defaults, with plugin version and sender identity. Successful requests also contain 0.png in their numbered directory.",
+  "description": "Original tool arguments before normalization or defaults, with plugin version and sender identity. Successful requests also contain 0.webp in their numbered directory.",
   "type": "object",
   "properties": {
     "plugin_version": {

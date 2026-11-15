@@ -74,18 +74,18 @@ async def test_real_http_returns_after_upload_before_response(
     try:
         await asyncio.wait_for(received.wait(), 3)
         assert SENT in await asyncio.wait_for(asyncio.shield(call), 3)
-        assert not (service.output_dir / "0/0.png").exists()
+        assert not (service.output_dir / "0/0.webp").exists()
         service.context.send_message.assert_not_awaited()
         respond.set()
         if status == 200:
             await asyncio.wait_for(downloaded.wait(), 3)
-            assert not (service.output_dir / "0/0.png").exists()
+            assert not (service.output_dir / "0/0.webp").exists()
             download_release.set()
         await finish_turn()
         service.context.send_message.assert_awaited_once()
         assert len(requests) == (2 if status == 200 else 1)
         if status == 200:
-            assert (service.output_dir / "0/0.png").read_bytes() == png
+            assert (service.output_dir / "0/0.webp").is_file()
         else:
             assert "HTTP 401" in service.context.llm_generate.call_args.kwargs["prompt"]
         assert not service._pending_requests

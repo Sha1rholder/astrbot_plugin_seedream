@@ -309,7 +309,7 @@ class ImageService:
             "or a failure explanation. Do not send the image yourself or call a delivery tool. "
             "Do not automatically retry this request. "
             f"Request archive: {request_dir.resolve() / 'request.yaml'}. "
-            "When available, response.yaml will contain the image URL and 0.png will contain "
+            "When available, response.yaml will contain the image URL and 0.webp will contain "
             "the downloaded image in the same directory."
         )
 

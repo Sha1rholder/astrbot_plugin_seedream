@@ -147,7 +147,7 @@ async def test_mixed_reference_order_and_snapshot(
         yaml.safe_load((service.output_dir / "0/request.yaml").read_text())["request"]
         == arguments
     )
-    assert (service.output_dir / "0/0.png").read_bytes() == png
+    assert (service.output_dir / "0/0.webp").is_file()
 
 
 async def test_https_references_preserve_signatures_and_mixed_order(

@@ -1,5 +1,6 @@
 """Verify atomic archive writes and bounded storage cleanup."""
 
+import io
 from pathlib import Path
 
 import httpx
@@ -8,6 +9,7 @@ from data.plugins.astrbot_plugin_seedream.src.generate import (
     ImageGenerationError,
     SeedreamAPI,
 )
+from PIL import Image
 
 ARGUMENTS = {"prompt": "cat", "description": "A cat"}
 
@@ -18,6 +20,7 @@ def test_atomic_storage_failure(api, tmp_path, png, monkeypatch, stage):
     directory = api.create_request(output, ARGUMENTS)
     SeedreamAPI.save_image(png, directory)
     original = (directory / "request.yaml").read_bytes()
+    original_image = (directory / "0.webp").read_bytes()
     if stage == "request":
         original_write = Path.write_text
 
@@ -34,16 +37,16 @@ def test_atomic_storage_failure(api, tmp_path, png, monkeypatch, stage):
         original_replace = Path.replace
 
         def fail_replace(path, *args, **kwargs):
-            if path.name == "0.png":
+            if path.name == "0.webp":
                 raise OSError("disk full")
             return original_replace(path, *args, **kwargs)
 
         monkeypatch.setattr(Path, "replace", fail_replace)
         with pytest.raises(OSError):
             SeedreamAPI.save_image(png, directory)
-    assert {p.name for p in directory.iterdir()} == {"request.yaml", "0.png"}
+    assert {p.name for p in directory.iterdir()} == {"request.yaml", "0.webp"}
     assert (directory / "request.yaml").read_bytes() == original
-    assert (directory / "0.png").read_bytes() == png
+    assert (directory / "0.webp").read_bytes() == original_image
 
 
 @pytest.mark.parametrize("limit", [0, True, "10"])
@@ -138,3 +141,40 @@ async def test_cleanup_precedes_http_and_keeps_current_and_queued(
 def test_storage_limit_in_bytes(api, config, expected):
     api.config.update(config)
     assert api.storage_limit() == expected
+
+
+@pytest.mark.parametrize("mode", ["RGB", "RGBA", "P"])
+def test_lossless_webp_preserves_pixels_and_removes_png(tmp_path, mode):
+    """Preserve colors and alpha, including RGB values under transparent pixels."""
+    source = Image.new("RGBA", (16, 16))
+    source.putdata([(i, 255 - i, i // 2, i) for i in range(256)])
+    source = source.convert(mode)
+    encoded = io.BytesIO()
+    source.save(encoded, "PNG")
+    original = tmp_path / "0.png"
+    original.write_bytes(encoded.getvalue())
+    path = SeedreamAPI.save_image(original.read_bytes(), tmp_path)
+    assert {p.name for p in tmp_path.iterdir()} == {"0.webp"}
+    with Image.open(path) as result:
+        assert result.format == "WEBP"
+        assert result.size == source.size
+        assert result.convert("RGBA").tobytes() == source.convert("RGBA").tobytes()
+
+
+@pytest.mark.parametrize("stage", ["encode", "publish"])
+def test_conversion_failure_preserves_png(tmp_path, png, monkeypatch, stage):
+    """Do not remove the source or leave partial output when encoding fails."""
+    original = tmp_path / "0.png"
+    original.write_bytes(png)
+
+    def fail_save(*args, **kwargs):
+        raise OSError("disk full")
+
+    if stage == "encode":
+        monkeypatch.setattr(Image.Image, "save", fail_save)
+    else:
+        monkeypatch.setattr(Path, "replace", fail_save)
+    with pytest.raises(OSError, match="disk full"):
+        SeedreamAPI.save_image(png, tmp_path)
+    assert original.read_bytes() == png
+    assert {p.name for p in tmp_path.iterdir()} == {"0.png"}

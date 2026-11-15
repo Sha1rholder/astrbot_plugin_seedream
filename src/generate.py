@@ -186,7 +186,7 @@ class SeedreamAPI:
         on_request_sent: Callable[[], None] | None = None,
         retention_floor: int | None = None,
     ) -> list[Path]:
-        """Submit once, download the single PNG and publish it in the archive.
+        """Submit once, download the PNG and archive a lossless WebP.
 
         Args:
             payload: Validated Seedream options.
@@ -198,7 +198,7 @@ class SeedreamAPI:
             retention_floor: Oldest request still generating or awaiting delivery.
 
         Returns:
-            A list containing the saved PNG path.
+            A list containing the saved WebP path.
 
         Raises:
             ImageGenerationError: For invalid configuration, references or output.
@@ -362,43 +362,29 @@ class SeedreamAPI:
 
     @staticmethod
     def save_image(raw: bytes, request_dir: Path) -> Path:
-        """Validate PNG bytes and publish the unchanged image atomically.
+        """Convert downloaded bytes and atomically publish a lossless WebP.
 
         Args:
             raw: Downloaded image bytes.
             request_dir: Existing request archive directory.
 
         Returns:
-            The published PNG path.
+            The published WebP path.
 
         Raises:
-            ImageGenerationError: If the output is not a valid PNG.
-            OSError: If image storage fails.
+            OSError: If image decoding, conversion or storage fails.
         """
-        try:
-            with Image.open(io.BytesIO(raw)) as image:
-                if image.format != "PNG":
-                    raise ValueError
-                image.verify()
-            with Image.open(io.BytesIO(raw)) as image:
-                image.load()
-        except (
-            ValueError,
-            OSError,
-            UnidentifiedImageError,
-            Image.DecompressionBombError,
-        ):
-            raise ImageGenerationError(
-                "Image service did not return a valid PNG image. Do not automatically retry."
-            ) from None
         with (
             STORAGE_LOCK,
             tempfile.TemporaryDirectory(prefix=".image-", dir=request_dir) as temporary,
         ):
-            staging = Path(temporary) / "0.png"
-            staging.write_bytes(raw)
-            destination = request_dir / "0.png"
+            staging = Path(temporary) / "0.webp"
+            with Image.open(io.BytesIO(raw)) as image:
+                image.save(staging, "WEBP", lossless=True, exact=True)
+            destination = request_dir / "0.webp"
             staging.replace(destination)
+            # Remove an existing PNG only after its replacement is published.
+            (request_dir / "0.png").unlink(missing_ok=True)
         return destination
 
     def storage_limit(self) -> int:

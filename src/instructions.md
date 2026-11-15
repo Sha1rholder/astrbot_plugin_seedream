@@ -1,6 +1,6 @@
 # Seedream image generation instructions
 
-Generate and deliver one PNG image with Seedream 5.5 using `seedream_image_generate`.
+Generate and deliver one lossless WebP image with Seedream 5.5 using `seedream_image_generate`.
 
 - `prompt`: Describe the subject, composition, style and constraints. Specify aspect ratio and intended use here; resolution defaults to 2K. For edits, describe what should change and what should remain unchanged, identifying references in selection order. Must be nonblank, up to 32,000 characters.
 - `description`: A short caption automatically sent with the image. Does not affect generation. Must be nonblank, up to 1,000 characters.
@@ -21,10 +21,10 @@ For edits, select references in the order you describe them. Attachment indices 
 {"prompt":"Remove the background from image 1, preserve the cat and its fine fur edges","description":"Cat with a transparent background","reference_images":[0],"background":"transparent"}
 ```
 
-To find previously generated images, search the archive directory shown below with `rg -n -i -F -g request.yaml -- 'keyword' 'ARCHIVE_DIR'`. Each successful generation has a numbered directory containing `request.yaml`, `response.yaml` and `0.png`.
+To find previously generated images, search the archive directory shown below with `rg -n -i -F -g request.yaml -- 'keyword' 'ARCHIVE_DIR'`. Each successful generation has a numbered directory containing `request.yaml`, `response.yaml` and `0.webp`.
 
-For a follow-up edit, pass the existing `0.png` absolute path or the HTTPS URL in `response.yaml` at `data[0].url`. Generated URLs are valid for 24 hours after generation; after expiry, use the local PNG while it remains in the archive. Use the file or URL belonging to the intended version. Replace the example path with an actual existing file:
+For a follow-up edit, pass the existing `0.webp` absolute path or the HTTPS URL in `response.yaml` at `data[0].url`. Generated URLs are valid for 24 hours after generation; after expiry, use the local WebP while it remains in the archive. Use the file or URL belonging to the intended version. Replace the example path with an actual existing file:
 
 ```json
-{"prompt":"Give the cat in image 1 the color palette of image 2, preserving its pose","description":"Cat with the reference color palette","reference_images":["/AstrBot/data/plugin_data/astrbot_plugin_seedream/images/42/0.png",0]}
+{"prompt":"Give the cat in image 1 the color palette of image 2, preserving its pose","description":"Cat with the reference color palette","reference_images":["/AstrBot/data/plugin_data/astrbot_plugin_seedream/images/42/0.webp",0]}
 ```
