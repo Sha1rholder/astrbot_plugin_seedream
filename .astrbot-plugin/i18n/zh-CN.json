@@ -1,0 +1,41 @@
+{
+  "metadata": {
+    "display_name": "Seedream图像生成",
+    "short_desc": "使用Seedream5.5生成PNG图像",
+    "desc": "使用VOLCENGINE_API_KEY生成或编辑单张PNG，支持最多10张参考图和透明背景，后台投递并保留请求归档"
+  },
+  "config": {
+    "api_key": {
+      "description": "VOLCENGINE_API_KEY",
+      "hint": "在此填写API密钥，留空时读取环境变量VOLCENGINE_API_KEY"
+    },
+    "base_url": {
+      "description": "Seedream完整API地址",
+      "hint": "填写完整生图接口地址，默认https://ark.cn-beijing.volces.com/api/v3/images/generations。文生图和编辑均直接使用该地址，修改后请重载插件"
+    },
+    "timeout_seconds": {
+      "description": "API请求超时时间（秒）",
+      "hint": "生成和下载的HTTP超时时间。工具等待请求体发送完成后确认提交，随后在后台生成和投递，失败不自动重试"
+    },
+    "max_storage_gb": {
+      "description": "图像归档最大储存占用（GB）",
+      "hint": "每次请求前检查归档容量，超限时从最早请求开始清理，保护排队、生成中和等待投递的请求。新图片可能暂时超限，下次请求前再清理"
+    },
+    "allow_non_admin_private_chat": {
+      "description": "允许非管理员私聊生图",
+      "hint": "默认关闭。关闭时，非管理员私聊调用本插件任意工具均返回：目前非管理员用户仅允许在群聊中生图。管理员私聊和群聊仍按原有规则处理。修改后请重载插件"
+    },
+    "sliding_window": {
+      "description": "滑动窗口时长（分钟）",
+      "hint": "非负整数。个人和全局配额共用此窗口，设为0时跳过两项配额检查"
+    },
+    "per_user_max_images": {
+      "description": "每个用户在滑动窗口内的最大图像数量",
+      "hint": "非负整数。按请求的图像数量计数，包括等待中和失败的任务。配额为0时，正常配额检查会拒绝请求，但工具仍可用。窗口时长为0时忽略此设置。被拒绝的请求不会被记录。管理员不受此检查限制。使用每个用户最近的1000条记录"
+    },
+    "total_max_images": {
+      "description": "滑动窗口内所有用户的最大图像数量",
+      "hint": "非负整数。统计所有已接受请求的图像数量，包括管理员的请求。仅限制普通用户。滑动窗口启用时，设为0将拒绝普通用户的请求。使用最近的1000条全局记录"
+    }
+  }
+}

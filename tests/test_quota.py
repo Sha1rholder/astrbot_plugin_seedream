@@ -1,0 +1,298 @@
+"""Test image generation quotas, archives, and storage limits."""
+
+import asyncio
+import time
+from unittest.mock import AsyncMock
+
+import httpx
+import pytest
+from astrbot.api import AstrBotConfig
+from data.plugins.astrbot_plugin_seedream import main as plugin_module
+
+NOW = 1_800_000_000
+pytestmark = pytest.mark.asyncio
+
+ARGUMENTS = {"prompt": "cat", "description": "A cat"}
+
+
+@pytest.mark.parametrize("scope", ["per_user", "total"])
+async def test_concurrent_admission_and_failed_job_counts(
+    service, event, scope, finish_turn
+):
+    service.api.config.update(per_user_max_images=100, total_max_images=100)
+    service.api.config[f"{scope}_max_images"] = 1
+    release = asyncio.Event()
+
+    async def generate(*args, on_request_sent, **kwargs):
+        on_request_sent()
+        await release.wait()
+        raise httpx.ReadTimeout("private")
+
+    service.api.generate.side_effect = generate
+    try:
+        results = await asyncio.gather(
+            *(service.generate(event, ARGUMENTS) for _ in range(4))
+        )
+        assert (
+            sum("Image generation request submitted" in item for item in results) == 1
+        )
+        assert sum("limit exceeded" in item for item in results) == 3
+        assert (service.requests_dir / "123456.log").read_text() == f"{NOW}\t0\n"
+        assert (service.requests_dir / "total.log").read_text() == f"{NOW}\tfalse\t1\n"
+    finally:
+        release.set()
+        await finish_turn()
+    assert "limit exceeded" in await service.generate(event, ARGUMENTS)
+    service.api.generate.assert_awaited_once()
+
+
+async def test_admin_requests_count_toward_total(service, event, finish_turn):
+    service.api.config.update(per_user_max_images=5, total_max_images=2)
+    for admin, user in [(True, "admin"), (False, "member")]:
+        event.is_admin.return_value = admin
+        event.get_sender_id.return_value = user
+        assert "Image generation request submitted" in await service.generate(
+            event, ARGUMENTS
+        )
+        await finish_turn()
+    assert "2/2 images used" in await service.generate(event, ARGUMENTS)
+    assert len((service.requests_dir / "total.log").read_text().splitlines()) == 2
+    event.is_admin.return_value = True
+    assert "Image generation request submitted" in await service.generate(
+        event, ARGUMENTS
+    )
+    await finish_turn()
+
+
+@pytest.fixture
+def service(service, monkeypatch):
+    monkeypatch.setattr(time, "time", lambda: NOW)
+    service.api.generate = AsyncMock(return_value=[])
+    return service
+
+
+def add_history(service, timestamp, count: int | None = 1, user_id="123456"):
+    for _ in range(count or 1):
+        directory = service.api.create_request(
+            service.output_dir, ARGUMENTS, user_id=user_id
+        )
+        service.requests_dir.mkdir(exist_ok=True)
+        with (service.requests_dir / f"{user_id}.log").open("a") as log:
+            log.write(f"{timestamp}\t{directory.name}\n")
+    return directory
+
+
+async def test_default_window_boundary_and_expired_missing_yaml(
+    service, event, finish_turn
+):
+    # Exactly 360 minutes old is outside the window and needs no YAML read.
+    expired = add_history(service, NOW - 360 * 60, count=5)
+    (expired / "request.yaml").unlink()
+    add_history(service, NOW - 360 * 60 + 1, count=2)
+    assert "Image generation request submitted" in await service.generate(
+        event, ARGUMENTS
+    )
+    await finish_turn()
+    assert "3/3 images used" in await service.generate(event, ARGUMENTS)
+
+
+async def test_custom_window_slides_and_configuration_is_read_each_call(
+    service, event, monkeypatch, finish_turn
+):
+    service.api.config.update(sliding_window=2, per_user_max_images=2)
+    add_history(service, NOW - 119, count=2)
+    assert "2/2 images used" in await service.generate(event, ARGUMENTS)
+    monkeypatch.setattr(time, "time", lambda: NOW + 1)
+    assert "Image generation request submitted" in await service.generate(
+        event, ARGUMENTS
+    )
+    await finish_turn()
+    service.api.config["per_user_max_images"] = 1
+    assert "1/1 images used" in await service.generate(event, ARGUMENTS)
+
+
+async def test_user_quota_is_shared_across_conversations_but_not_users(
+    service, event, finish_turn
+):
+    add_history(service, NOW, count=3)
+    event.unified_msg_origin = "webchat:GroupMessage:another-group"
+    assert "limit exceeded" in await service.generate(event, ARGUMENTS)
+    event.get_sender_id.return_value = "another-user"
+    assert "Image generation request submitted" in await service.generate(
+        event, ARGUMENTS
+    )
+    await finish_turn()
+
+
+@pytest.mark.parametrize("scope", ["per_user", "total"])
+async def test_quota_survives_restart(service, event, scope, finish_turn, tmp_path):
+    other_scope = "total" if scope == "per_user" else "per_user"
+    service.api.config.update(
+        {f"{scope}_max_images": 1, f"{other_scope}_max_images": 100}
+    )
+    assert "Image generation request submitted" in await service.generate(
+        event, ARGUMENTS
+    )
+    await finish_turn()
+    config = AstrBotConfig(
+        config_path=str(tmp_path / "restarted_config.json"),
+        default_config=dict(service.api.config),
+    )
+    restarted = plugin_module.SeedreamPlugin(service.context, config)
+    try:
+        assert "1/1 images used" in await restarted.service.generate(event, ARGUMENTS)
+        assert not restarted.service._tasks
+    finally:
+        await restarted.terminate()
+
+
+async def test_zero_maximum_rejects_with_actionable_message(service, event):
+    service.api.config["per_user_max_images"] = 0
+    result = await service.generate(event, ARGUMENTS)
+    assert "0/0 images used" in result
+    assert "personal quota" in result
+    assert "No image task was queued" in result
+    assert "A corrected request may be submitted" in result
+    assert not service.output_dir.exists()
+    assert not service.requests_dir.exists()
+    service.api.generate.assert_not_awaited()
+
+
+async def test_zero_window_bypasses_quota_but_keeps_recording(
+    service, event, finish_turn
+):
+    service.api.config.update(
+        sliding_window=0, per_user_max_images=0, total_max_images=0
+    )
+    old = add_history(service, NOW)
+    (old / "request.yaml").unlink()
+    for _ in range(2):
+        result = await service.generate(event, ARGUMENTS)
+        assert "Image generation request submitted" in result
+    await finish_turn()
+    assert len((service.requests_dir / "123456.log").read_text().splitlines()) == 3
+    assert service.api.generate.await_count == 2
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("sliding_window", -1),
+        ("per_user_max_images", True),
+        ("sliding_window", 1.5),
+        ("total_max_images", "5"),
+    ],
+)
+async def test_invalid_quota_config_rejected_before_recording(
+    service, event, key, value
+):
+    service.api.config[key] = value
+    result = await service.generate(event, ARGUMENTS)
+    assert f"{key} must be a nonnegative integer" in result
+    assert not service.output_dir.exists()
+    assert not service.requests_dir.exists()
+    service.api.generate.assert_not_awaited()
+
+
+@pytest.mark.parametrize("damage", ["missing", "yaml"])
+async def test_incomplete_history_does_not_silently_bypass_quota(
+    service, event, damage
+):
+    directory = add_history(service, NOW)
+    archive_path = directory / "request.yaml"
+    if damage == "missing":
+        archive_path.unlink()
+    else:
+        archive_path.write_text("request: [")
+    result = await service.generate(event, ARGUMENTS)
+    assert "Cannot verify the image quota" in result
+    assert "No image task was queued" in result
+    assert not (service.output_dir / "1").exists()
+    service.api.generate.assert_not_awaited()
+
+
+async def test_admin_bypass_uses_current_identity(service, event, finish_turn):
+    service.api.config.update(per_user_max_images=0, total_max_images=0)
+    for admin in (True, False, True):
+        event.is_admin.return_value = admin
+        result = await service.generate(event, ARGUMENTS)
+        assert ("Image generation request submitted" in result) is admin
+        await finish_turn()
+    assert (service.requests_dir / "total.log").read_text().splitlines() == [
+        f"{NOW}\ttrue\t1",
+        f"{NOW}\ttrue\t1",
+    ]
+    assert len((service.requests_dir / "123456.log").read_text().splitlines()) == 2
+
+
+async def test_total_window_slides_including_admin_receipts(
+    service, event, monkeypatch, finish_turn
+):
+    service.api.config.update(sliding_window=1, total_max_images=5)
+    service.requests_dir.mkdir()
+    total = service.requests_dir / "total.log"
+    total.write_text(f"{NOW - 60}\tfalse\t5\n{NOW - 59}\ttrue\t5\n")
+    result = await service.generate(event, ARGUMENTS)
+    assert "5/5 images used" in result
+    assert "last 1 minutes" in result
+    monkeypatch.setattr(time, "time", lambda: NOW + 1)
+    assert "Image generation request submitted" in await service.generate(
+        event, ARGUMENTS
+    )
+    await finish_turn()
+
+
+async def test_total_history_error_is_reported_to_agent(service, event):
+    service.requests_dir.mkdir()
+    (service.requests_dir / "total.log").write_text("invalid receipt\n")
+    result = await service.generate(event, ARGUMENTS)
+    assert "Cannot verify the total image quota" in result
+    assert "Tell the user" in result
+    service.api.generate.assert_not_awaited()
+    assert not service.output_dir.exists()
+
+
+async def test_shared_window_change_applies_to_both_quotas(service, event, finish_turn):
+    service.api.config.update(
+        sliding_window=1, per_user_max_images=1, total_max_images=1
+    )
+    add_history(service, NOW - 90)
+    (service.requests_dir / "total.log").write_text(f"{NOW - 90}\tfalse\t1\n")
+    assert "Image generation request submitted" in await service.generate(
+        event, ARGUMENTS
+    )
+    await finish_turn()
+    service.api.config["sliding_window"] = 2
+    assert "2/1 images used" in await service.generate(event, ARGUMENTS)
+    event.get_sender_id.return_value = "another-user"
+    result = await service.generate(event, ARGUMENTS)
+    assert "2/1 images used" in result
+    assert "total quota for all users" in result
+
+
+async def test_both_logs_keep_only_latest_1000_receipts(service, event, finish_turn):
+    service.requests_dir.mkdir()
+    user = service.requests_dir / "123456.log"
+    total = service.requests_dir / "total.log"
+    user_lines = [f"{i}\t{i}" for i in range(1005)]
+    total_lines = [f"{i}\ttrue\t1" for i in range(1005)]
+    user.write_text("\n".join(user_lines) + "\n")
+    total.write_text("\n".join(total_lines) + "\n")
+    assert "Image generation request submitted" in await service.generate(
+        event, ARGUMENTS
+    )
+    await finish_turn()
+    assert user.read_text().splitlines() == user_lines[6:] + [f"{NOW}\t0"]
+    assert total.read_text().splitlines() == total_lines[6:] + [f"{NOW}\tfalse\t1"]
+
+
+async def test_user_named_total_cannot_collide_with_aggregate_log(
+    service, event, finish_turn
+):
+    event.get_sender_id.return_value = "total"
+    assert "Image generation request submitted" in await service.generate(
+        event, ARGUMENTS
+    )
+    await finish_turn()
+    assert (service.requests_dir / "%74otal.log").read_text() == f"{NOW}\t0\n"
+    assert (service.requests_dir / "total.log").read_text() == f"{NOW}\tfalse\t1\n"

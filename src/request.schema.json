@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/Sha1rholder/astrbot_plugin_seedream/main/src/request.schema.json",
+  "title": "Archived Seedream image generation request",
+  "description": "Original tool arguments before normalization or defaults, with plugin version and sender identity. Successful requests also contain 0.png in their numbered directory.",
+  "type": "object",
+  "properties": {
+    "plugin_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "request": {
+      "$ref": "#/$defs/request"
+    },
+    "user_id": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "required": [
+    "plugin_version",
+    "request"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32000,
+          "description": "Full generation or edit prompt. Describe aspect ratio, shape and intended use in natural language."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000,
+          "description": "Short caption automatically delivered with the image. Does not affect generation."
+        },
+        "reference_images": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\.([jJ][pP][eE]?[gG]|[pP][nN][gG]|[wW][eE][bB][pP])$"
+              },
+              {
+                "type": "string",
+                "pattern": "^https://[^\\s]+$"
+              }
+            ]
+          },
+          "maxItems": 10,
+          "uniqueItems": true,
+          "description": "Ordered zero-based attachment indices, absolute local image paths on the AstrBot host, or publicly accessible HTTPS image URLs (including unexpired Seedream output URLs). Current message images precede quoted images. PNG, JPEG and WebP only; 30 MB per image. URL contents are validated by the provider. Original URLs are archived, but reference bytes are not."
+        },
+        "background": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "auto",
+            "transparent",
+            "opaque",
+            null
+          ],
+          "description": "Background transparency. Omitted or null selects auto."
+        }
+      },
+      "required": [
+        "prompt",
+        "description"
+      ]
+    }
+  }
+}

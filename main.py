@@ -1,24 +1,93 @@
-from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
-from astrbot.api.star import Context, Star, register
-from astrbot.api import logger
+"""Connect AstrBot lifecycle hooks to the image generation service."""
 
-@register("helloworld", "YourName", "一个简单的 Hello World 插件", "1.0.0")
-class MyPlugin(Star):
-    def __init__(self, context: Context):
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+from pathlib import Path
+
+from astrbot.api import AstrBotConfig
+from astrbot.api.event import AstrMessageEvent, MessageEventResult, filter
+from astrbot.api.provider import LLMResponse, ProviderRequest
+from astrbot.api.star import Context, Star, StarTools
+from astrbot.core.agent.run_context import ContextWrapper
+from astrbot.core.astr_agent_context import AstrAgentContext
+
+from .src.generate import SeedreamAPI
+from .src.service import ImageService
+
+PLUGIN_NAME = "astrbot_plugin_seedream"
+
+
+class SeedreamPlugin(Star):
+    """Connect AstrBot lifecycle hooks to the configured image service."""
+
+    def __init__(self, context: Context, config: AstrBotConfig) -> None:
+        """Connect lifecycle hooks to an independent Seedream service.
+
+        Args:
+            context: AstrBot plugin context.
+            config: Seedream plugin configuration.
+        """
         super().__init__(context)
+        plugin_dir = Path(__file__).resolve().parent
+        self.service = ImageService(
+            context,
+            SeedreamAPI(config, plugin_dir),
+            StarTools.get_data_dir(PLUGIN_NAME),
+            self.logger,
+        )
 
-    async def initialize(self):
-        """可选择实现异步的插件初始化方法，当实例化该插件类之后会自动调用该方法。"""
+    @filter.command("seedream_help")
+    async def seedream_help(
+        self, event: AstrMessageEvent
+    ) -> AsyncIterator[MessageEventResult]:
+        """Show instructions after checking access and credentials.
 
-    # 注册指令的装饰器。指令名为 helloworld。注册成功后，发送 `/helloworld` 就会触发这个指令，并回复 `你好, {user_name}!`
-    @filter.command("helloworld")
-    async def helloworld(self, event: AstrMessageEvent):
-        """这是一个 hello world 指令""" # 这是 handler 的描述，将会被解析方便用户了解插件内容。建议填写。
-        user_name = event.get_sender_name()
-        message_str = event.message_str # 用户发的纯文本消息字符串
-        message_chain = event.get_messages() # 用户所发的消息的消息链 # from astrbot.api.message_components import *
-        logger.info(message_chain)
-        yield event.plain_result(f"Hello, {user_name}, 你发了 {message_str}!") # 发送一条纯文本消息
+        Args:
+            event: Message requesting help.
 
-    async def terminate(self):
-        """可选择实现异步的插件销毁方法，当插件被卸载/停用时会调用。"""
+        Yields:
+            The guide or an actionable access or configuration error.
+        """
+        yield event.plain_result(self.service.instructions(event))
+
+    @filter.on_llm_request()
+    async def add_image_hint(
+        self, event: AstrMessageEvent, req: ProviderRequest
+    ) -> None:
+        """Append Seedream tool guidance to the current LLM request.
+
+        Args:
+            event: Original message event.
+            req: Provider request being prepared.
+        """
+        self.service.add_image_hint(event, req)
+
+    @filter.on_agent_done()
+    async def mark_agent_finished(
+        self,
+        event: AstrMessageEvent,
+        _context: ContextWrapper[AstrAgentContext],
+        _response: LLMResponse,
+    ) -> None:
+        """Record agent completion without releasing unsent final text.
+
+        Args:
+            event: Event whose agent has finished.
+            _context: Agent context supplied by AstrBot.
+            _response: Final model response supplied by AstrBot.
+        """
+        await self.service.mark_agent_finished(event)
+
+    @filter.after_message_sent()
+    async def release_image_results(self, event: AstrMessageEvent) -> None:
+        """Release images after the complete foreground reply.
+
+        Args:
+            event: Event whose message has been sent.
+        """
+        await self.service.release_image_results(event)
+
+    async def terminate(self) -> None:
+        """Cancel pending work and close the HTTP client."""
+        await self.service.terminate()

@@ -1,0 +1,146 @@
+"""Share isolated AstrBot events, backends and image fixtures."""
+
+import asyncio
+import io
+import tempfile
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, create_autospec
+
+import httpx
+import pytest
+import pytest_asyncio
+from PIL import Image
+
+
+def pytest_configure(config):
+    """Isolate AstrBot's import-time configuration and template writes."""
+    runtime = tempfile.TemporaryDirectory(prefix="astrbot-image-tests-")
+    environment = pytest.MonkeyPatch()
+    config.add_cleanup(runtime.cleanup)
+    config.add_cleanup(environment.undo)
+    environment.setenv("ASTRBOT_ROOT", runtime.name)
+
+
+@pytest.fixture(autouse=True)
+def isolate_credentials(monkeypatch):
+    monkeypatch.delenv("VOLCENGINE_API_KEY", raising=False)
+
+
+@pytest.fixture(scope="session")
+def image_bytes():
+    def create(format_name="WEBP", color="blue", size=(16, 16), mode="RGB"):
+        output = io.BytesIO()
+        Image.new(mode, size, color).save(output, format_name)
+        return output.getvalue()
+
+    return create
+
+
+@pytest.fixture(scope="session")
+def webp(image_bytes):
+    return image_bytes()
+
+
+@pytest.fixture
+def mock_http():
+    """Install a mock transport; the backend fixture owns client cleanup."""
+
+    def install(api, handler):
+        api.client = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+        )
+        return api.client
+
+    return install
+
+
+@pytest.fixture
+def plugin_dir(tmp_path):
+    directory = tmp_path / "plugin"
+    directory.mkdir()
+    (directory / "metadata.yaml").write_text("version: v0.0.0\n", encoding="utf-8")
+    return directory
+
+
+@pytest_asyncio.fixture
+async def api(plugin_dir):
+    from data.plugins.astrbot_plugin_seedream.src.generate import SeedreamAPI
+
+    backend = SeedreamAPI({"api_key": "test-key"}, plugin_dir)
+    yield backend
+    await backend.close()
+
+
+@pytest_asyncio.fixture
+async def plugin(request, tmp_path, monkeypatch):
+    from astrbot.api import AstrBotConfig
+    from astrbot.api.star import Context, StarTools
+    from data.plugins.astrbot_plugin_seedream.main import SeedreamPlugin
+
+    context = Mock(spec=Context)
+    context.send_message = AsyncMock(return_value=True)
+    context.agent = SimpleNamespace(
+        run_turn=AsyncMock(
+            return_value=SimpleNamespace(result=AsyncMock(), cancel=AsyncMock())
+        )
+    )
+    context.get_current_chat_provider_id = AsyncMock(return_value="chat-model")
+    context.llm_generate = AsyncMock(
+        return_value=SimpleNamespace(completion_text="图片生成失败，请稍后再试")
+    )
+    monkeypatch.setattr(StarTools, "get_data_dir", lambda _: tmp_path)
+    config = AstrBotConfig(
+        config_path=str(tmp_path / "config.json"),
+        default_config={"api_key": "test-key", **getattr(request, "param", {})},
+    )
+    instance = SeedreamPlugin(context, config)
+    yield instance
+    await instance.terminate()
+
+
+@pytest.fixture
+def service(plugin):
+    return plugin.service
+
+
+@pytest.fixture
+def tool_context(service, event):
+    from astrbot.core.agent.run_context import ContextWrapper
+    from astrbot.core.astr_agent_context import AstrAgentContext
+
+    return ContextWrapper(
+        context=AstrAgentContext(context=service.context, event=event)
+    )
+
+
+@pytest.fixture
+def finish_turn(service, event):
+    """Release the foreground reply and wait for background delivery."""
+
+    async def finish():
+        await service.mark_agent_finished(event)
+        await service.release_image_results(event)
+        await asyncio.wait_for(asyncio.gather(*service._tasks), timeout=5)
+
+    return finish
+
+
+@pytest.fixture
+def event():
+    from astrbot.api.event import AstrMessageEvent
+
+    message = create_autospec(AstrMessageEvent, instance=True)
+    message.unified_msg_origin = "webchat:GroupMessage:test-session"
+    message.get_sender_id.return_value = "123456"
+    message.is_admin.return_value = False
+    message.is_private_chat.return_value = False
+    message.get_messages.return_value = []
+    message.get_platform_name.return_value = "webchat"
+    message.plain_result.side_effect = lambda text: text
+    message.chain_result.side_effect = lambda components: components
+    return message
+
+
+@pytest.fixture(scope="session")
+def png(image_bytes):
+    return image_bytes("PNG", color=(10, 20, 30, 100), mode="RGBA")
