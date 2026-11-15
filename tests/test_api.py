@@ -20,9 +20,18 @@ from PIL import Image
 ARGUMENTS = {"prompt": "  A cat  ", "description": "A cat"}
 
 
-@pytest.mark.parametrize("background", [None, "auto", "transparent", "opaque"])
-def test_fixed_payload_and_defaults(api, background):
-    arguments = {**ARGUMENTS, "background": background}
+@pytest.mark.parametrize(
+    "options",
+    [
+        {},
+        {"background": None},
+        {"background": "auto"},
+        {"background": "transparent"},
+        {"background": "opaque"},
+    ],
+)
+def test_fixed_payload_and_defaults(api, options):
+    arguments = {**ARGUMENTS, **options}
     body, references = api.prepare(arguments)
     assert body == {
         "model": "doubao-seedream-5-5-261028",
@@ -31,11 +40,10 @@ def test_fixed_payload_and_defaults(api, background):
         "output_format": "png",
         "response_format": "url",
         "watermark": False,
-        "background": background or "auto",
+        "background": options.get("background") or "auto",
     }
     assert not references
     assert arguments["prompt"] == "  A cat  "
-    assert api.prepare(ARGUMENTS)[0]["background"] == "auto"
 
 
 @pytest.mark.parametrize(

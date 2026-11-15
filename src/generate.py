@@ -27,6 +27,7 @@ REQUEST_SCHEMA: dict[str, Any] = json.loads(
     Path(__file__).with_name("request.schema.json").read_text(encoding="utf-8")
 )
 INPUT_SCHEMA: dict[str, Any] = REQUEST_SCHEMA["$defs"]["request"]
+INPUT_VALIDATOR = jsonschema.Draft202012Validator(INPUT_SCHEMA)
 DEFAULT_ENDPOINT = "https://ark.cn-beijing.volces.com/api/v3/images/generations"
 MAX_REFERENCE_BYTES = 30_000_000
 STORAGE_LOCK = threading.Lock()
@@ -86,7 +87,7 @@ class SeedreamAPI:
             ImageGenerationError: If the arguments violate the tool contract.
         """
         try:
-            jsonschema.validate(arguments, INPUT_SCHEMA)
+            INPUT_VALIDATOR.validate(arguments)
         except jsonschema.ValidationError as exc:
             location = ".".join(map(str, exc.absolute_path)) or "arguments"
             raise ImageGenerationError(
@@ -538,10 +539,10 @@ class SeedreamAPI:
                 size = SeedreamAPI.storage_size(directory)
                 shutil.rmtree(directory)
                 total -= size
-                if total < limit:
+                if total <= limit:
                     return
             raise ImageGenerationError(
-                "Image archive storage cannot be reduced below max_storage_gb without "
+                "Image archive storage cannot be reduced to max_storage_gb or less without "
                 "deleting current or queued requests or unrelated files. Increase the limit "
                 "or free space in the image archive directory. No API request was made."
             )

@@ -14,13 +14,24 @@ from PIL import Image
 ARGUMENTS = {"prompt": "cat", "description": "A cat"}
 
 
-@pytest.mark.parametrize("stage", ["request", "image"])
-def test_atomic_storage_failure(api, tmp_path, png, monkeypatch, stage):
+@pytest.mark.parametrize(
+    "stage,existing_webp",
+    [
+        ("request", True),
+        ("encode", False),
+        ("encode", True),
+        ("publish", False),
+        ("publish", True),
+    ],
+)
+def test_atomic_storage_failure(api, tmp_path, png, monkeypatch, stage, existing_webp):
+    """Preserve existing files and remove staging files after failed archive writes."""
     output = tmp_path / "images"
     directory = api.create_request(output, ARGUMENTS)
-    SeedreamAPI.save_image(png, directory)
-    original = (directory / "request.yaml").read_bytes()
-    original_image = (directory / "0.webp").read_bytes()
+    if existing_webp:
+        SeedreamAPI.save_image(png, directory)
+    (directory / "0.png").write_bytes(png)
+    original = {path.name: path.read_bytes() for path in directory.iterdir()}
     if stage == "request":
         original_write = Path.write_text
 
@@ -30,23 +41,22 @@ def test_atomic_storage_failure(api, tmp_path, png, monkeypatch, stage):
             return original_write(path, *args, **kwargs)
 
         monkeypatch.setattr(Path, "write_text", fail_write)
-        with pytest.raises(OSError):
-            api.create_request(output, ARGUMENTS)
-        assert {p.name for p in output.iterdir()} == {"0"}
     else:
-        original_replace = Path.replace
 
-        def fail_replace(path, *args, **kwargs):
-            if path.name == "0.webp":
-                raise OSError("disk full")
-            return original_replace(path, *args, **kwargs)
+        def fail_save(*args, **kwargs):
+            raise OSError("disk full")
 
-        monkeypatch.setattr(Path, "replace", fail_replace)
-        with pytest.raises(OSError):
+        if stage == "encode":
+            monkeypatch.setattr(Image.Image, "save", fail_save)
+        else:
+            monkeypatch.setattr(Path, "replace", fail_save)
+    with pytest.raises(OSError, match="disk full"):
+        if stage == "request":
+            api.create_request(output, ARGUMENTS)
+        else:
             SeedreamAPI.save_image(png, directory)
-    assert {p.name for p in directory.iterdir()} == {"request.yaml", "0.webp"}
-    assert (directory / "request.yaml").read_bytes() == original
-    assert (directory / "0.webp").read_bytes() == original_image
+    assert {p.name for p in output.iterdir()} == {"0"}
+    assert {path.name: path.read_bytes() for path in directory.iterdir()} == original
 
 
 @pytest.mark.parametrize("limit", [0, True, "10"])
@@ -89,7 +99,13 @@ def test_next_request_id_scans_only_numeric_directories(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "limit,remaining", [(100, {"0", "2", "10"}), (99, {"2", "10"}), (60, {"10"})]
+    "limit,remaining",
+    [
+        (100, {"0", "2", "10"}),
+        (99, {"2", "10"}),
+        (60, {"2", "10"}),
+        (59, {"10"}),
+    ],
 )
 def test_capacity_cleanup_order_and_boundary(tmp_path, limit, remaining):
     for name, size in [("10", 30), ("2", 30), ("0", 40)]:
@@ -101,8 +117,9 @@ def test_capacity_cleanup_order_and_boundary(tmp_path, limit, remaining):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("headroom", [0, 1])
 async def test_cleanup_precedes_http_and_keeps_current_and_queued(
-    api, tmp_path, monkeypatch, mock_http
+    api, tmp_path, monkeypatch, mock_http, headroom
 ):
     arguments = ARGUMENTS
     output = tmp_path / "images"
@@ -111,7 +128,7 @@ async def test_cleanup_precedes_http_and_keeps_current_and_queued(
     current = api.create_request(output, arguments)
     queued = api.create_request(output, arguments)
     monkeypatch.setattr(
-        api, "storage_limit", lambda: SeedreamAPI.storage_size(current) * 2 + 1
+        api, "storage_limit", lambda: SeedreamAPI.storage_size(current) * 2 + headroom
     )
     calls = []
 
@@ -159,22 +176,3 @@ def test_lossless_webp_preserves_pixels_and_removes_png(tmp_path, mode):
         assert result.format == "WEBP"
         assert result.size == source.size
         assert result.convert("RGBA").tobytes() == source.convert("RGBA").tobytes()
-
-
-@pytest.mark.parametrize("stage", ["encode", "publish"])
-def test_conversion_failure_preserves_png(tmp_path, png, monkeypatch, stage):
-    """Do not remove the source or leave partial output when encoding fails."""
-    original = tmp_path / "0.png"
-    original.write_bytes(png)
-
-    def fail_save(*args, **kwargs):
-        raise OSError("disk full")
-
-    if stage == "encode":
-        monkeypatch.setattr(Image.Image, "save", fail_save)
-    else:
-        monkeypatch.setattr(Path, "replace", fail_save)
-    with pytest.raises(OSError, match="disk full"):
-        SeedreamAPI.save_image(png, tmp_path)
-    assert original.read_bytes() == png
-    assert {p.name for p in tmp_path.iterdir()} == {"0.png"}

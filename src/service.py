@@ -8,7 +8,7 @@ from collections.abc import Callable
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
-from weakref import WeakKeyDictionary
+from weakref import WeakKeyDictionary, WeakSet
 
 import httpx
 from astrbot.api.event import AstrMessageEvent, MessageEventResult
@@ -63,9 +63,7 @@ class ImageService:
         self._turn_finished: WeakKeyDictionary[AstrMessageEvent, asyncio.Event] = (
             WeakKeyDictionary()
         )
-        self._agent_finished: WeakKeyDictionary[AstrMessageEvent, bool] = (
-            WeakKeyDictionary()
-        )
+        self._agent_finished: WeakSet[AstrMessageEvent] = WeakSet()
         self._stopping = False
         context.add_llm_tools(self.instructions_tool, generation_tool)
 
@@ -166,7 +164,7 @@ class ImageService:
         Args:
             event: Event whose agent has finished.
         """
-        self._agent_finished[event] = True
+        self._agent_finished.add(event)
 
     async def release_image_results(self, event: AstrMessageEvent) -> None:
         """Release results once the final response has been sent.
@@ -174,7 +172,7 @@ class ImageService:
         Args:
             event: Event whose output has been delivered.
         """
-        if self._agent_finished.get(event, False):
+        if event in self._agent_finished:
             finished = self._turn_finished.get(event)
             if finished is not None:
                 finished.set()

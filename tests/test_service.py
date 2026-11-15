@@ -298,7 +298,7 @@ async def test_combined_delivery_failure_never_regenerates(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("blocked_stage", ["reference", "api"])
 async def test_tool_blocks_until_reference_loading_and_api_submission(
-    service, event, monkeypatch, tmp_path, blocked_stage, tool_context
+    service, event, monkeypatch, tmp_path, blocked_stage, tool_context, finish_turn
 ):
     """Slow references and API submission must block the actual tool acknowledgement."""
     entered = asyncio.Event()
@@ -351,9 +351,7 @@ async def test_tool_blocks_until_reference_loading_and_api_submission(
         assert "Image generation request submitted" in result
         assert "The result is not ready yet" in result
         assert "Do not send the image yourself" in result
-        await service.mark_agent_finished(event)
-        await service.release_image_results(event)
-        await asyncio.wait_for(asyncio.gather(*service._tasks), timeout=1)
+        await finish_turn()
         assert not service._tasks
         assert service.api.generate.call_args.args[0]["prompt"] == "cat"
         assert service.api.generate.call_args.args[3]["prompt"] == "cat"
@@ -445,7 +443,6 @@ async def test_failures_return_to_model_before_submission_or_deliver_afterwards(
         assert origin == event.unified_msg_origin
         assert "Do not automatically retry" not in message
         service.context.llm_generate.assert_awaited_once()
-        assert expected in service.context.llm_generate.call_args.kwargs["prompt"]
         assert "tools" not in service.context.llm_generate.call_args.kwargs
         message = service.context.llm_generate.call_args.kwargs["prompt"]
     else:

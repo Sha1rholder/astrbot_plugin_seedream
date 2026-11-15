@@ -25,8 +25,7 @@ async def test_private_chat_denies_every_tool_before_other_checks(
     if invalid_request:
         service.api.config["api_key"] = ""
     service.api.config["per_user_max_images"] = 0
-    for api in (service.api,):
-        api.generate = AsyncMock()
+    service.api.generate = AsyncMock()
     for tool in service.context.add_llm_tools.call_args.args:
         arguments: dict[str, object] = {}
         if not tool.name.startswith("get_"):
@@ -43,8 +42,7 @@ async def test_private_chat_denies_every_tool_before_other_checks(
     assert not service.output_dir.exists()
     assert not service.requests_dir.exists()
     service.context.send_message.assert_not_awaited()
-    for api in (service.api,):
-        api.generate.assert_not_awaited()
+    service.api.generate.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -62,8 +60,7 @@ async def test_allowed_chats_keep_existing_tool_behavior(
     event.is_admin.return_value = is_admin
     if is_private:
         event.unified_msg_origin = "webchat:FriendMessage:test-session"
-    for api in (service.api,):
-        api.generate = AsyncMock(return_value=[])
+    service.api.generate = AsyncMock(return_value=[])
     for tool in service.context.add_llm_tools.call_args.args:
         arguments: dict[str, object] = {}
         if not tool.name.startswith("get_"):
@@ -74,8 +71,7 @@ async def test_allowed_chats_keep_existing_tool_behavior(
         else:
             assert "Image generation request submitted" in result
     await finish_turn()
-    for api in (service.api,):
-        api.generate.assert_awaited_once()
+    service.api.generate.assert_awaited_once()
 
 
 def test_private_chat_setting_defaults_to_disabled():

@@ -79,11 +79,6 @@ async def plugin(request, tmp_path, monkeypatch):
 
     context = Mock(spec=Context)
     context.send_message = AsyncMock(return_value=True)
-    context.agent = SimpleNamespace(
-        run_turn=AsyncMock(
-            return_value=SimpleNamespace(result=AsyncMock(), cancel=AsyncMock())
-        )
-    )
     context.get_current_chat_provider_id = AsyncMock(return_value="chat-model")
     context.llm_generate = AsyncMock(
         return_value=SimpleNamespace(completion_text="图片生成失败，请稍后再试")
