@@ -104,4 +104,9 @@ class GenerateImageTool(FunctionTool[AstrAgentContext]):
         Returns:
             Transmission acknowledgement or a pre-submission error.
         """
-        return await self.service.generate(context.context.event, kwargs)
+        session = context.context.agent_session
+        return await self.service.generate(
+            context.context.event,
+            kwargs,
+            agent_session_id=session.session_id if session is not None else None,
+        )
