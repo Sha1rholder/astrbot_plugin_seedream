@@ -1,8 +1,8 @@
 name: astrbot_plugin_seedream
 display_name: Seedream Image Generation
-short_desc: Generate and edit PNG images with Seedream 5.5.
-desc: Generate one PNG with Seedream 5.5, up to 10 reference images and transparent backgrounds. Includes background delivery, archives and quotas.
-version: 0.0.3
+short_desc: Enable AstrBot agents to generate and edit images with Seedream 5.5.
+desc: Enable AstrBot agents to generate and edit images with Seedream 5.5. Features minimal system prompts, comprehensive error handling, and persistent storage for generated outputs.
+version: 0.1.0
 author: Sha1rholder
 repo: https://github.com/Sha1rholder/astrbot_plugin_seedream
 # astrbot_version: ">=4.30.0"

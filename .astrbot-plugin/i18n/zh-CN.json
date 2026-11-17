@@ -1,8 +1,8 @@
 {
   "metadata": {
     "display_name": "Seedream图像生成",
-    "short_desc": "使用Seedream5.5生成PNG图像",
-    "desc": "使用VOLCENGINE_API_KEY生成或编辑单张PNG，支持最多10张参考图和透明背景，后台投递并保留请求归档"
+    "short_desc": "让AstrBot agents能使用Seedream 5.5生成和编辑图像",
+    "desc": "让AstrBot agents能使用Seedream 5.5生成和编辑图像。具有极简系统提示词、完善的错误处理以及产物持久化能力"
   },
   "config": {
     "api_key": {
@@ -11,7 +11,7 @@
     },
     "base_url": {
       "description": "Seedream完整API地址",
-      "hint": "填写完整生图接口地址，默认https://ark.cn-beijing.volces.com/api/v3/images/generations。文生图和编辑均直接使用该地址，修改后请重载插件"
+      "hint": "填写完整生图接口地址，默认<https://ark.cn-beijing.volces.com/api/v3/images/generations>，尚不支持。文生图和编辑均直接使用该地址，修改后请重载插件"
     },
     "timeout_seconds": {
       "description": "API请求超时时间（秒）",
